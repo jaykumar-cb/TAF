@@ -79,20 +79,44 @@ class SecurityTest(SecurityBase):
 
         if type == "embedding":
             payload = {
-              "compute": "g6.xlarge",
-              "configuration": {
-                "name": "intfloat/e5-mistral-7b-instruct",
-                "kind": "embedding-generation",
-                "parameters": {}
-              }
+                "name": self.generate_random_name("embeddingModel"),
+                "modelCatalogId": "29455162-6925-4b55-a726-9b7cc12c9f4a",
+                "config": {
+                    "provider": "hostedAWS",
+                    "region": "us-east-1",
+                    "multiAZ": True,
+                    "compute": {
+                        "instanceType": "g6.xlarge",
+                        "instanceCount": 2
+                    }
+                },
+                "parameters": {
+                    "tuning": {
+                        "quantization": "full-precision",
+                        "optimization": "throughput",
+                        "dimensions": 4096
+                    }
+                }
             }
         elif type == "text":
             payload = {
-                "compute": "g6.xlarge",
-                "configuration": {
-                    "name": "meta-llama/Llama-3.1-8B-Instruct",
-                    "kind": "text-generation",
-                    "parameters": {}
+                "name": self.generate_random_name("textModel"),
+                "modelCatalogId": "5676ca67-c6d8-4db4-9064-66cede4c2f8b",
+                "config": {
+                    "provider": "hostedAWS",
+                    "region": "us-east-1",
+                    "multiAZ": True,
+                    "compute": {
+                        "instanceType": "g6.xlarge",
+                        "instanceCount": 2
+                    }
+                },
+                "parameters": {
+                    "tuning": {
+                        "quantization": "full-precision",
+                        "optimization": "throughput",
+                        "dimensions": 4096
+                    },
                 }
             }
 
@@ -102,8 +126,7 @@ class SecurityTest(SecurityBase):
 
         if integration_id:
             openai_payload = {
-                "id": integration_id,
-                "modelName": "text-embedding-3-small"
+                "id": integration_id
             }
         elif openai_key:
             openai_payload = {
@@ -122,9 +145,13 @@ class SecurityTest(SecurityBase):
 
         payload = {
             "type": "structured",
-            "schemaFields": [
-                "country"
-            ],
+            "createIndexes": True,
+            "embeddingFieldMappings": {
+                "vectorEmbeddingField1": {
+                    "sourceFields": ["country"],
+                    "encodingFormat": "float"
+                }
+            },
             "embeddingModel": {
                 "external": openai_payload
             },
@@ -133,8 +160,6 @@ class SecurityTest(SecurityBase):
                 "scope": "inventory",
                 "collection": "airline"
             },
-            "vectorIndexName": "vector-index-name",
-            "embeddingFieldName": "embedding-field",
             "name": "flow2"
         }
 
@@ -142,7 +167,7 @@ class SecurityTest(SecurityBase):
 
     def get_sample_vulcan_workflow_payload(self, s3_access_key=None, s3_secret_key=None,
                                            s3_region="us-east-1", s3_path="pdf", s3_bucket="davinci-tests",
-                                           s3_integration=None, openai_integration=None, openai_key=None):
+                                           s3_integration=None, openai_integration=None, openai_key=None, field_names=["text"]): # Dummy field as default for now
 
         if s3_access_key and s3_secret_key:
             data_source = {
@@ -169,8 +194,7 @@ class SecurityTest(SecurityBase):
 
         if openai_integration:
             openai_payload = {
-                "id": openai_integration,
-                "modelName": "text-embedding-3-small"
+                "id": openai_integration
             }
         elif openai_key:
             openai_payload = {
@@ -190,6 +214,13 @@ class SecurityTest(SecurityBase):
         payload = {
           "name": "testworkflow1",
           "type": "unstructured",
+          "createIndexes": True,
+          "embeddingFieldMappings": {
+            "vectorEmbeddingField1": {
+              "sourceFields": field_names,
+              "encodingFormat": "float"
+            }
+          },
           "cbKeyspace": {
             "bucket": "travel-sample",
             "scope": "_default",
@@ -198,8 +229,6 @@ class SecurityTest(SecurityBase):
           "embeddingModel": {
             "external": openai_payload
           },
-          "vectorIndexName": "test-index-1",
-          "embeddingFieldName": "embedding-text",
           "dataSource": data_source,
           "chunkingStrategy": {
             "strategyType": "PARAGRAPH_SPLITTER",
@@ -213,7 +242,7 @@ class SecurityTest(SecurityBase):
 
     def get_sample_integrations_payload(self, integration_type="s3", access_key="sample_access_key",
                                         secret_key="secret_key", aws_region="us-east-1", aws_bucket="davinci-tests",
-                                        path="pdf"):
+                                        path="pdf", session_token=None):
 
         if integration_type == "s3":
             payload = {
@@ -227,6 +256,8 @@ class SecurityTest(SecurityBase):
                     "folderPath": path
                 }
             }
+            if session_token:
+                payload["data"]["sessionToken"] = session_token
         elif integration_type == "openAI":
             payload = {
                 "integrationType": "openAI",
@@ -235,9 +266,19 @@ class SecurityTest(SecurityBase):
                     "key": secret_key
                 }
             }
+        elif integration_type == "bedrock":
+            payload = {
+                "integrationType": "bedrock",
+                "name": self.generate_random_name(),
+                "data": {
+                    "accessKeyId": access_key,
+                    "secretAccessKey": secret_key
+                }
+            }
 
         return payload
 
+    
     def wait_for_model_deletion(self, model_id, timeout=1800):
         start_time = time.time()
         while time.time() < start_time + timeout:
@@ -268,9 +309,12 @@ class SecurityTest(SecurityBase):
             resp = self.capellaAPIv2.get_autovec_workflow(self.tenant_id, self.project_id,
                                                           self.cluster_id, workflow_id)
             if resp.status_code == 200:
-                status = resp.json()["data"]["status"]
-                if status == "running":
-                    return True
+                workflow_runs = resp.json()["data"]["workflowRuns"]
+                if workflow_runs and len(workflow_runs) > 0:
+                    latest_run = workflow_runs[0]  
+                    status = latest_run["status"]
+                    if status == "running" or status == "completed":
+                        return True
                 self.sleep(10, "Wait for workflow to deploy")
             else:
                 self.sleep(10, "Could not get workflow details")
@@ -1000,6 +1044,19 @@ class SecurityTest(SecurityBase):
         sensitive_info_list.append(sample_s3_secret_key)
         sensitive_info_list.append(sample_s3_access_key)
 
+        # Create bedrock integration
+        sample_bedrock_access_key = self.generate_random_string(prefix="bedrock", length=20)
+        sample_bedrock_secret_key = self.generate_random_string(prefix="bedrock", length=20)
+        integrations_payload = self.get_sample_integrations_payload("bedrock", access_key=sample_bedrock_access_key,
+                                                                    secret_key=sample_bedrock_secret_key)
+        resp = self.capellaAPIv2.create_autovec_integration(self.tenant_id, integrations_payload)
+        if resp.status_code != 202:
+            self.fail("Failed to create bedrock integration. Status code: {}. Error: {}".
+                      format(resp.status_code, resp.content))
+        bedrock_integration_id = resp.json()["id"]
+        sensitive_info_list.append(sample_bedrock_secret_key)
+        sensitive_info_list.append(sample_bedrock_access_key)
+
         # Check for sensitive info in integrations api's
         resp = self.capellaAPIv2.get_autovec_integration(self.tenant_id, openai_integration_id)
         data = resp.json()
@@ -1015,6 +1072,15 @@ class SecurityTest(SecurityBase):
         sensitive_found = self.check_for_sensitive_info(data, sensitive_info_list)
         if len(sensitive_found) > 0:
             self.fail("Sensitive info found in get integration api")
+
+        resp = self.capellaAPIv2.get_autovec_integration(self.tenant_id, bedrock_integration_id)
+        if resp.status_code != 200:
+            self.fail("Failed to get bedrock integration details. Status code: {}. Error: {}".
+                      format(resp.status_code, resp.content))
+        data = resp.json()
+        sensitive_found = self.check_for_sensitive_info(data, sensitive_info_list)
+        if len(sensitive_found) > 0:
+            self.fail("Sensitive info found in get bedrock integration api")
 
         resp = self.capellaAPIv2.list_autovec_integrations(self.tenant_id)
         if resp.status_code != 200:
