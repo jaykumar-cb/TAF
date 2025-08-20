@@ -9,9 +9,9 @@ import requests
 # import itertools
 # import base64
 # from datetime import datetime
-from capellaAPI.capella.dedicated.CapellaAPI import CapellaAPI as CapellaAPIv2
-from capellaAPI.capella.columnar.CapellaAPI import CapellaAPI as ColumnarAPI
-from capellaAPI.capella.dedicated.CapellaAPI_v4 import CapellaAPI
+from lib.capellaAPI.capella.dedicated.CapellaAPI import CapellaAPI as CapellaAPIv2
+from lib.capellaAPI.capella.columnar.CapellaAPI import CapellaAPI as ColumnarAPI
+from lib.capellaAPI.capella.dedicated.CapellaAPI_v4 import CapellaAPI
 from constants.cloud_constants.capella_constants import AWS
 from TestInput import TestInputSingleton
 # from couchbase_utils.capella_utils.dedicated import CapellaUtils

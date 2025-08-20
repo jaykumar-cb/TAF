@@ -1,3 +1,4 @@
 [submodule "lib/capellaAPI"]
 	path = lib/capellaAPI
-	url = https://github.com/couchbaselabs/CapellaRESTAPIs
+	url = https://github.com/jaykumar-cb/CapellaRESTAPIs
+	branch = feat-update-ai-services
