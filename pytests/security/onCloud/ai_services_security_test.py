@@ -353,7 +353,8 @@ class SecurityTest(SecurityBase):
 
         model_apikey_response = resp.json()
         api_key = model_apikey_response["data"]["apiKey"]
-        return api_key
+        api_key_id = model_apikey_response["data"]["id"]
+        return api_key_id, api_key
 
     def create_autovec_workflow(self):
         resp = self.capellaAPIv2.create_autovec_workflow(self.tenant_id, self.project_id,
@@ -1359,6 +1360,9 @@ class SecurityTest(SecurityBase):
 
         return payload
 
+    def get_model_apikey_update_payload(self, model_ids, allowed_ips):
+        return self.get_model_apikey_create_payload(model_ids, allowed_ips)
+
     def test_model_ip_allowlist(self):
 
         # Current IP is already allowed on the cluster so connection to be successfull
@@ -1428,6 +1432,7 @@ class SecurityTest(SecurityBase):
 
         model_details = resp.json()
         llm_model_endpoint = model_details["data"]["network"]["endpoint"]
+        llm_model_id = model_details["data"]["id"]
 
         resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.embedding_model_id)
         if resp.status_code != 200:
@@ -1457,7 +1462,7 @@ class SecurityTest(SecurityBase):
 
         # Test with valid api key
         self.log.info("Test with generated api key")
-        api_key = self.create_model_apikey(model_ids=[embedding_model_id], allowed_ips=[])
+        api_key_id, api_key = self.create_model_apikey(model_ids=[embedding_model_id, llm_model_id], allowed_ips=[])
 
         payload = self.get_chat_completion_payload()
         resp = self.send_request_to_model(llm_model_endpoint, "chat", payload, api_key)
@@ -1472,93 +1477,50 @@ class SecurityTest(SecurityBase):
             self.fail("Failed to get response for embedding endpoint even with db creds. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
-        # Revoke the api_key and test
-        self.log.info("Revoke the api key and test auth")
-        old_password = password
-        password = self.generate_random_name(base_name="psswd") + "!123"
-        resp = self.capellaAPIv2.update_db_user(self.tenant_id, self.project_id, self.cluster_id, user_id,
-                                                password)
-        if resp.status_code != 200:
-            self.fail(
-                "Failed to update password for db user. userid: {}, username: {}, password: {}. Status code: {}. Error: {}".
-                format(user_id, username, password, resp.status_code, resp.content))
+        # Update the api key to allow only embedding model
+        resp = self.capellaAPIv2.update_model_api_key(self.tenant_id, self.project_id, api_key)
+        if resp.status_code != 204:
+            self.fail("Failed to update api_key: {}. Status code: {}. Error: {}".
+                      format(api_key, resp.status_code, resp.content))
 
-        payload = self.get_chat_completion_payload()
-        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload,
-                                          username, password)
-        if resp.status_code != 200:
-            self.fail(
-                "Failed to get response for chat completions endpoint even with updated creds. Status code: {}. Error: {}".
-                format(resp.status_code, resp.content))
-
+        # It should work with embedding model
         payload = self.get_embedding_payload()
-        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload,
-                                          username, password)
+        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload, api_key)
         if resp.status_code != 200:
-            self.fail(
-                "Failed to get response for embedding endpoint even with updated creds. Status code: {}. Error: {}".
-                format(resp.status_code, resp.content))
-
-        # Test with old password
-        self.log.info("Testing with older credentials")
-        payload = self.get_chat_completion_payload()
-        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload,
-                                          username, old_password)
-        if resp.status_code != 401:
-            self.fail("Auth test failed for chat completions for old creds. username: {}, password: {}".
-                      format(username, old_password))
-
-        payload = self.get_embedding_payload()
-        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload,
-                                          username, old_password)
-        if resp.status_code != 401:
-            self.fail("Auth test failed for embedding for old creds. username: {}, password: {}".
-                      format(username, old_password))
-
-        # Test with deleted creds
-        self.log.info("Testing with deleted credentials")
-        resp = self.capellaAPIv2.delete_db_user(self.tenant_id, self.project_id, self.cluster_id, user_id)
-        if resp.status_code != 200:
-            self.fail("Failed to delete db user. Status code: {}. Error: {}".format(resp.status_code, resp.content))
-
-        payload = self.get_chat_completion_payload()
-        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload,
-                                          username, password)
-        if resp.status_code != 401:
-            self.fail("Auth test failed for chat completions for deleted creds. username: {}, password: {}".
-                      format(username, password))
-
-        payload = self.get_embedding_payload()
-        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload,
-                                          username, password)
-        if resp.status_code != 401:
-            self.fail("Auth test failed for embedding for deleted creds. username: {}, password: {}".
-                      format(username, password))
-
-        # Create db creds for second cluster and test auth
-        self.log.info("Test with db creds of different cluster")
-        username = self.generate_random_name(base_name="user")
-        password = self.generate_random_name(base_name="psswd") + "!123"
-        resp = self.capellaAPIv2.create_db_user(self.tenant_id, self.project_id, self.second_cluster_id,
-                                                username, password)
-
-        if resp.status_code != 200:
-            self.fail("Failed to create db user. Status code: {}. Error: {}".
+            self.fail("Failed to get response for embedding endpoint even with db creds. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
+        # It should fail with llm model
         payload = self.get_chat_completion_payload()
-        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload,
-                                          username, password)
+        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload, api_key)
         if resp.status_code != 401:
-            self.fail("Auth test failed for chat completions for deleted creds. username: {}, password: {}".
-                      format(username, password))
+            self.fail(
+                "Failed test for chat completions endpoint even with api key not allowed for model. Status code: {}. Error: {}".
+                format(resp.status_code, resp.content))
+
+
+        # Revoke the api_key and test
+        self.log.info("Revoke the api key and test auth")
+        resp = self.capellaAPIv2.delete_model_api_key(self.tenant_id, api_key_id=api_key_id)
+        if resp.status_code != 202:
+            self.fail(
+                "Failed to delete api_key: {}. Status code: {}. Error: {}".
+                format(api_key, resp.status_code, resp.content))
+
+        self.log.info("Testing with revoked api key")
+        payload = self.get_chat_completion_payload()
+        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload, api_key)
+        if resp.status_code != 401:
+            self.fail("Auth test failed for chat completions for revoked api key. api_key: {}".
+                      format(api_key))
 
         payload = self.get_embedding_payload()
         resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload,
-                                          username, password)
+                                          api_key)
         if resp.status_code != 401:
-            self.fail("Auth test failed for embedding for deleted creds. username: {}, password: {}".
-                      format(username, password))
+            self.fail("Auth test failed for embedding for revoked api key. api_key: {}".
+                      format(api_key))
+
 
     def get_model_apikey_create_payload(self, model_ids, allowed_ips):
         payload = {
@@ -1591,7 +1553,7 @@ class SecurityTest(SecurityBase):
         model_id = model_details["data"]["id"]
 
         # create an api key
-        api_key = self.create_model_apikey(model_ids=[model_id], allowed_ips=["0.0.0.0/0"]) # TODO check the cidr
+        _, api_key = self.create_model_apikey(model_ids=[model_id], allowed_ips=["0.0.0.0/0"]) # TODO check the cidr
 
         payload = self.get_chat_completion_payload()
         resp = self.send_request_to_model(llm_model_endpoint,"chat", payload, api_key , check_http=True)
