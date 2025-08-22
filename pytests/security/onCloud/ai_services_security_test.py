@@ -324,8 +324,7 @@ class SecurityTest(SecurityBase):
 
 
     def create_model(self):
-        resp = self.capellaAPIv2.deploy_model(self.tenant_id, self.project_id,
-                                              self.cluster_id, self.get_sample_model_deployment_payload())
+        resp = self.capellaAPIv2.deploy_model(self.tenant_id, self.get_sample_model_deployment_payload())
 
         error_type = ""
         if resp.status_code == 409:
@@ -343,6 +342,18 @@ class SecurityTest(SecurityBase):
                       format(resp.status_code, resp.content))
 
         return resp.json()["id"]
+
+    def create_model_apikey(self, model_ids, allowed_ips):
+        resp = self.capellaAPIv2.create_model_api_key(tenant_id=self.tenant_id, model_id=self.embedding_model_id,
+                                                      payload=self.get_model_apikey_create_payload(model_ids=model_ids, allowed_ips=allowed_ips))
+
+        if resp.status_code != 200:
+            self.fail("Failed to create model api key. Status code: {}. Error: {}".
+                      format(resp.status_code, resp.content))
+
+        model_apikey_response = resp.json()
+        api_key = model_apikey_response["data"]["apiKey"]
+        return api_key
 
     def create_autovec_workflow(self):
         resp = self.capellaAPIv2.create_autovec_workflow(self.tenant_id, self.project_id,
@@ -1186,10 +1197,11 @@ class SecurityTest(SecurityBase):
                           format(model))
             error_type = resp.json()["errorType"]
             if error_type == "UnsupportedModel":
-                self.fail("Error messages do not match. Expected: {}. Returned: {}".format("UnsupportedModel", error_type))
+                self.fail(
+                    "Error messages do not match. Expected: {}. Returned: {}".format("UnsupportedModel", error_type))
 
         invalid_embedding_models = ['intfloat/multilingual-e5-large-instruct', 'intfloat/multilingual-e5-large',
-                                   'intfloat/llm-retriever-base']
+                                    'intfloat/llm-retriever-base']
 
         payload["configuration"]["kind"] = "embedding-generation"
         for model in invalid_embedding_models:
@@ -1219,7 +1231,7 @@ class SecurityTest(SecurityBase):
                                                params=json.dumps(payload))
         return resp
 
-    def send_request_to_model(self, model_endpoint, request_type, payload, username, password, extra_headers=None,
+    def send_request_to_model(self, model_endpoint, request_type, payload, apikey, extra_headers=None,
                               expect_conn_failure=False, check_http=False):
 
         url = None
@@ -1233,9 +1245,8 @@ class SecurityTest(SecurityBase):
             self.log.info("Replacing https with http")
             url = url.replace("https", "http")
 
-        authorization = base64.b64encode('{}:{}'.format(username, password).encode()).decode()
         headers = {
-            'Authorization': 'Basic %s' % authorization,
+            'Authorization': 'Bearer %s' % apikey,
             'Content-type': 'application/json'
         }
 
@@ -1334,18 +1345,19 @@ class SecurityTest(SecurityBase):
         if len(chats) > 0:
             payload['messages'] = chats
 
-        return  payload
+        return payload
 
     def get_embedding_payload(self, text=""):
         payload = {
             "input": "Your text string goes here",
-            "model": "intfloat/e5-mistral-7b-instruct"
+            "model": "intfloat/e5-mistral-7b-instruct",
+            "input_type": "passage"
         }
 
         if text != "":
             payload["input"] = text
 
-        return  payload
+        return payload
 
     def test_model_ip_allowlist(self):
 
@@ -1409,77 +1421,59 @@ class SecurityTest(SecurityBase):
             self.fail("Failed to send request to model even though current IP is allowed")
 
     def test_gateway_endpoints_auth(self):
-        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.project_id, self.cluster_id,
-                                                   self.llm_model_id)
+        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.llm_model_id)
         if resp.status_code != 200:
             self.fail("Failed to fetch model details. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
         model_details = resp.json()
-        llm_model_endpoint = model_details["data"]["endpoint"]
+        llm_model_endpoint = model_details["data"]["network"]["endpoint"]
 
-        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.project_id, self.cluster_id,
-                                                   self.embedding_model_id)
+        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.embedding_model_id)
         if resp.status_code != 200:
             self.fail("Failed to fetch model details. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
         model_details = resp.json()
-        embedding_model_endpoint = model_details["data"]["endpoint"]
+        embedding_model_endpoint = model_details["data"]["network"]["endpoint"]
+        embedding_model_id = model_details["data"]["id"]
 
-        # Test with invalid usernames and passwords
+        # Test with invalid api_keys
         self.log.info("Testing auth with invalid username and password")
-        usernames = []
-        passwords = []
-        for _ in range(5):
-            username = self.generate_random_name(base_name="user")
-            password = self.generate_random_name(base_name="psswd")
-            usernames.append(username)
-            passwords.append(password)
 
-        for uname, pwd in zip(usernames, passwords):
+        for _ in range(5):
+            rand_api_key = self.generate_random_name(base_name="apikey")
             payload = self.get_chat_completion_payload()
             resp = self.send_request_to_model(llm_model_endpoint, "chat", payload,
-                                              uname, pwd)
+                                              rand_api_key)
             if resp.status_code != 401:
-                self.fail("Auth test failed for chat completion endpoint for username: {}, password: {}".
-                          format(uname, pwd))
+                self.fail("Auth test failed for chat completion endpoint for api key: {}".format(rand_api_key))
 
             payload = self.get_embedding_payload()
-            resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload,
-                                              uname, pwd)
+            resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload, rand_api_key)
             if resp.status_code != 401:
-                self.fail("Auth test failed for embedding model endpoint for username: {}, password: {}".
-                          format(uname, pwd))
+                self.fail("Auth test failed for embedding model endpoint for api key: {}".
+                          format(rand_api_key))
 
-        # Test with db credentials
-        self.log.info("Test with db credentials")
-        username = self.generate_random_name(base_name="user")
-        password = self.generate_random_name(base_name="psswd") + "!123"
-        resp = self.capellaAPIv2.create_db_user(self.tenant_id, self.project_id, self.cluster_id,
-                                                username, password)
-
-        if resp.status_code != 200:
-            self.fail("Failed to create db user. Status code: {}. Error: {}".
-                      format(resp.status_code, resp.content))
-        user_id = resp.json()["id"]
+        # Test with valid api key
+        self.log.info("Test with generated api key")
+        api_key = self.create_model_apikey(model_ids=[embedding_model_id], allowed_ips=[])
 
         payload = self.get_chat_completion_payload()
-        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload,
-                                          username, password)
+        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload, api_key)
         if resp.status_code != 200:
-            self.fail("Failed to get response for chat completions endpoint even with db creds. Status code: {}. Error: {}".
-                      format(resp.status_code, resp.content))
+            self.fail(
+                "Failed to get response for chat completions endpoint even with db creds. Status code: {}. Error: {}".
+                format(resp.status_code, resp.content))
 
         payload = self.get_embedding_payload()
-        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload,
-                                          username, password)
+        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload, api_key)
         if resp.status_code != 200:
             self.fail("Failed to get response for embedding endpoint even with db creds. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
-        # Update password of db user and test
-        self.log.info("Update user creds and test auth")
+        # Revoke the api_key and test
+        self.log.info("Revoke the api key and test auth")
         old_password = password
         password = self.generate_random_name(base_name="psswd") + "!123"
         resp = self.capellaAPIv2.update_db_user(self.tenant_id, self.project_id, self.cluster_id, user_id,
@@ -1501,8 +1495,9 @@ class SecurityTest(SecurityBase):
         resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload,
                                           username, password)
         if resp.status_code != 200:
-            self.fail("Failed to get response for embedding endpoint even with updated creds. Status code: {}. Error: {}".
-                      format(resp.status_code, resp.content))
+            self.fail(
+                "Failed to get response for embedding endpoint even with updated creds. Status code: {}. Error: {}".
+                format(resp.status_code, resp.content))
 
         # Test with old password
         self.log.info("Testing with older credentials")
@@ -1538,7 +1533,7 @@ class SecurityTest(SecurityBase):
                                           username, password)
         if resp.status_code != 401:
             self.fail("Auth test failed for embedding for deleted creds. username: {}, password: {}".
-                       format(username, password))
+                      format(username, password))
 
         # Create db creds for second cluster and test auth
         self.log.info("Test with db creds of different cluster")
@@ -1565,47 +1560,48 @@ class SecurityTest(SecurityBase):
             self.fail("Auth test failed for embedding for deleted creds. username: {}, password: {}".
                       format(username, password))
 
+    def get_model_apikey_create_payload(self, model_ids, allowed_ips):
+        payload = {
+            "name": "TestAPIKey",
+            "description": "Test API Key",
+            "expiryDuration": 180,
+            "accessPolicy": {
+                "allowedModels": model_ids, # List of model IDs to allow access
+                "allowedIPs": allowed_ips,
+            }
+        }
+        return payload
 
     def test_https_for_model_endpoint(self):
-        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.project_id, self.cluster_id,
-                                                   self.llm_model_id)
+        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.llm_model_id)
         if resp.status_code != 200:
             self.fail("Failed to fetch model details. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
         model_details = resp.json()
-        llm_model_endpoint = model_details["data"]["endpoint"]
+        llm_model_endpoint = model_details["data"]["network"]["endpoint"]
 
-        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.project_id, self.cluster_id,
-                                                   self.embedding_model_id)
+        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.embedding_model_id)
         if resp.status_code != 200:
             self.fail("Failed to fetch model details. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
         model_details = resp.json()
-        embedding_model_endpoint = model_details["data"]["endpoint"]
+        embedding_model_endpoint = model_details["data"]["network"]["endpoint"]
+        model_id = model_details["data"]["id"]
 
-        username = self.generate_random_name(base_name="user")
-        password = self.generate_random_name(base_name="psswd") + "!123"
-        resp = self.capellaAPIv2.create_db_user(self.tenant_id, self.project_id, self.cluster_id,
-                                                username, password)
-
-        if resp.status_code != 200:
-            self.fail("Failed to create db user. Status code: {}. Error: {}".
-                      format(resp.status_code, resp.content))
-        user_id = resp.json()["id"]
+        # create an api key
+        api_key = self.create_model_apikey(model_ids=[model_id], allowed_ips=["0.0.0.0/0"]) # TODO check the cidr
 
         payload = self.get_chat_completion_payload()
-        resp = self.send_request_to_model(llm_model_endpoint, "chat", payload,
-                                          username, password, check_http=True)
+        resp = self.send_request_to_model(llm_model_endpoint,"chat", payload, api_key , check_http=True)
         if resp.status_code != 200:
             self.fail(
                 "Failed to get response for chat completions endpoint even with db creds. Status code: {}. Error: {}".
                 format(resp.status_code, resp.content))
 
         payload = self.get_embedding_payload()
-        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload,
-                                          username, password, check_http=True)
+        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", payload, api_key, check_http=True)
         if resp.status_code != 200:
             self.fail("Failed to get response for embedding endpoint even with db creds. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
