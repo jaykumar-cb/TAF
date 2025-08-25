@@ -282,8 +282,7 @@ class SecurityTest(SecurityBase):
     def wait_for_model_deletion(self, model_id, timeout=1800):
         start_time = time.time()
         while time.time() < start_time + timeout:
-            resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.project_id,
-                                                       self.cluster_id, model_id)
+            resp = self.capellaAPIv2.get_model_details(self.tenant_id, model_id)
             if resp.status_code == 404:
                 return True
 
@@ -375,8 +374,7 @@ class SecurityTest(SecurityBase):
 
     def create_model_callback(self, resp, test_method_args=None):
         model_id = resp.json()["id"]
-        res = self.capellaAPIv2.delete_model(self.tenant_id, self.project_id,
-                                             self.cluster_id, model_id)
+        res = self.capellaAPIv2.delete_model(self.tenant_id, self.project_id)
         if res.status_code != 204:
             self.fail("Failed to delete model: {}. Status code: {}. Error: {}".
                       format(model_id, res.status_code, res.content))
@@ -752,12 +750,12 @@ class SecurityTest(SecurityBase):
 
     def test_model_api_auth(self):
         url_method_map = {}
-        model_url = "{}/v2/organizations/{}/projects/{}/clusters/{}/languagemodels". \
-            format(self.capellaAPIv2.internal_url, self.tenant_id, self.project_id, self.cluster_id)
+        model_url = "{}/v2/organizations/{}/languagemodels". \
+            format(self.capellaAPIv2.internal_url, self.tenant_id)
         url_method_map[model_url] = ["POST"]
 
-        specific_model_url = "{}/v2/organizations/{}/projects/{}/clusters/{}/languagemodels/{}". \
-            format(self.capellaAPIv2.internal_url, self.tenant_id, self.project_id, self.cluster_id, self.invalid_id)
+        specific_model_url = "{}/v2/organizations/{}/languagemodels/{}". \
+            format(self.capellaAPIv2.internal_url, self.tenant_id, self.invalid_id)
         url_method_map[specific_model_url] = ["GET", "DELETE"]
 
         list_model_url = "{}/v2/organizations/{}/languagemodels?page={}&perPage={}". \
@@ -775,8 +773,6 @@ class SecurityTest(SecurityBase):
 
     def test_model_api_tenant_ids(self):
         test_method_args = {
-            'project_id': self.project_id,
-            'cluster_id': self.cluster_id,
             'payload': self.get_sample_model_deployment_payload()
         }
         self.log.info("Testing tenant ids authorization for create model api")
@@ -789,8 +785,6 @@ class SecurityTest(SecurityBase):
 
         self.model_id = self.create_model()
         test_method_args = {
-            'project_id': self.project_id,
-            'cluster_id': self.cluster_id,
             'model_id': self.model_id
         }
         self.log.info("Testing tenant ids authorization for get model api")
@@ -802,8 +796,6 @@ class SecurityTest(SecurityBase):
                       format(error))
 
         test_method_args = {
-            'project_id': self.project_id,
-            'cluster_id': self.cluster_id,
             'model_id': self.model_id
         }
         self.log.info("Testing tenant ids authorization for delete model api")
@@ -821,44 +813,6 @@ class SecurityTest(SecurityBase):
                                              None, [404, 403])
         if not result:
             self.fail("Authorization tenant ids test failed for list model api. Error: {}".
-                      format(error))
-
-
-    def test_model_api_project_ids(self):
-        test_method_args = {
-            'tenant_id': self.tenant_id,
-            'cluster_id': self.cluster_id,
-            'payload': self.get_sample_model_deployment_payload()
-        }
-        result, error = self.test_project_ids(self.capellaAPIv2.deploy_model, test_method_args,
-                                              'project_id', [202, 409],
-                                              self.create_model_callback, False)
-        if not result:
-            self.fail("Authorization project ids test failed for create model api. Error: {}".
-                      format(error))
-
-        self.model_id = self.create_model()
-        test_method_args = {
-            'tenant_id': self.tenant_id,
-            'cluster_id': self.cluster_id,
-            'model_id': self.model_id
-        }
-        result, error = self.test_project_ids(self.capellaAPIv2.get_model_details, test_method_args,
-                                              'project_id', [200])
-        if not result:
-            self.fail("Authorization project ids test failed for get model api. Error: {}".
-                      format(error))
-
-        test_method_args = {
-            'tenant_id': self.tenant_id,
-            'cluster_id': self.cluster_id,
-            'model_id': self.model_id
-        }
-        result, error = self.test_project_ids(self.capellaAPIv2.delete_model, test_method_args,
-                                              'project_id', [204, 404],
-                                              self.delete_model_callback, True)
-        if not result:
-            self.fail("Authorization project ids test failed for delete model api. Error: {}".
                       format(error))
 
     def test_model_api_authz_org_roles(self):
@@ -952,7 +906,6 @@ class SecurityTest(SecurityBase):
         if not result:
             self.fail("Authorization project roles test failed for delete model api. Error: {}".
                       format(error))
-
 
     def test_workflow_with_deleted_creds(self):
 
@@ -1182,16 +1135,13 @@ class SecurityTest(SecurityBase):
     def test_invalid_model_deployment(self):
 
         # List of invalid models:
-        invalid_llm_models = ['meta-llama/Meta-Llama-3-8B-Instruct', 'meta-llama/Llama-3.3-70B-Instruct',
-                              'meta-llama/Llama-3.2-3B-Instruct', 'meta-llama/Llama-Guard-3-8B']
+        invalid_llm_models = ['00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002',
+                              '00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000004']
 
-        payload = self.get_sample_model_deployment_payload()
-        payload["configuration"]["kind"] = "text-generation"
+        payload = self.get_sample_model_deployment_payload(type="text")
 
         for model in invalid_llm_models:
-            payload["configuration"]["name"] = model
-            resp = self.capellaAPIv2.deploy_model(self.tenant_id, self.project_id, self.cluster_id,
-                                                  payload)
+            resp = self.capellaAPIv2.deploy_model(self.tenant_id, payload)
             self.log.critical("Model deployment response: {}, {}".format(resp.content, resp.status_code))
             if resp.status_code != 400:
                 self.fail("Model deployment API with invalid llm model {} returned a non 400 response.".
@@ -1201,14 +1151,12 @@ class SecurityTest(SecurityBase):
                 self.fail(
                     "Error messages do not match. Expected: {}. Returned: {}".format("UnsupportedModel", error_type))
 
-        invalid_embedding_models = ['intfloat/multilingual-e5-large-instruct', 'intfloat/multilingual-e5-large',
-                                    'intfloat/llm-retriever-base']
+        invalid_embedding_models = ['00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002',
+                              '00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000004']
 
-        payload["configuration"]["kind"] = "embedding-generation"
+        payload = self.get_sample_model_deployment_payload(type="embedding")
         for model in invalid_embedding_models:
-            payload["configuration"]["name"] = model
-            resp = self.capellaAPIv2.deploy_model(self.tenant_id, self.project_id, self.cluster_id,
-                                                  payload)
+            resp = self.capellaAPIv2.deploy_model(self.tenant_id, payload)
             self.log.critical("Model deployment response: {}".format(resp.content))
             if resp.status_code != 400:
                 self.fail("Model deployment API with invalid embedding model {} returned a non 400 response.".
@@ -1219,12 +1167,10 @@ class SecurityTest(SecurityBase):
                 self.fail(
                     "Error messages do not match. Expected: {}. Returned: {}".format("UnsupportedModel", error_type))
 
-    def send_request_to_intelligence_endpoint(self, model_endpoint, function, payload,
-                                              username, password):
+    def send_request_to_intelligence_endpoint(self, model_endpoint, function, payload,api_key):
         intelligence_endpoint = model_endpoint + "/intelligence?function=" + function
-        authorization = base64.b64encode('{}:{}'.format(username, password).encode()).decode()
         headers = {
-            'Authorization': 'Basic %s' % authorization,
+            'Bearer': 'Basic %s' % api_key,
             'Content-type': 'application/json'
         }
 
@@ -1283,52 +1229,43 @@ class SecurityTest(SecurityBase):
                       format(resp.status_code, resp.content))
 
         model_details = resp.json()
-        model_endpoint = model_details["data"]["endpoint"]
+        model_endpoint = model_details["data"]["network"]["endpoint"]
+        model_id = model_details["data"]["id"]
 
-        # Test with invalid usernames and passwords
-        usernames = []
-        passwords = []
+        # Test with invalid api_keys
+        self.log.info("Testing auth with invalid api_keys")
+
         for _ in range(5):
-            username = self.generate_random_name(base_name="user")
-            password = self.generate_random_name(base_name="psswd")
-            usernames.append(username)
-            passwords.append(password)
-
-        for uname, pwd in zip(usernames, passwords):
-            payload = {"function": "sentiment", "text": "I am happy"}
-            resp = self.send_request_to_intelligence_endpoint(model_endpoint, "sentiment", payload,
-                                                              uname, pwd)
+            rand_api_key = self.generate_random_name(base_name="apikey")
+            payload = self.get_chat_completion_payload()
+            resp = self.send_request_to_model(model_endpoint, "chat", payload,
+                                              rand_api_key)
             if resp.status_code != 401:
-                self.fail("Auth test failed for username: {}, password: {}".format(uname, pwd))
+                self.fail("Auth test failed for chat completion endpoint for api key: {}".format(rand_api_key))
 
-        # Test with db credentials
-        username = self.generate_random_name(base_name="user")
-        password = self.generate_random_name(base_name="psswd") + "!123"
-        resp = self.capellaAPIv2.create_db_user(self.tenant_id, self.project_id, self.cluster_id,
-                                                username, password)
 
-        if resp.status_code != 200:
-            self.fail("Failed to create db user. Status code: {}. Error: {}".
-                      format(resp.status_code, resp.content))
-        user_id = resp.json()["id"]
+        # Test with valid api key
+        self.log.info("Test with generated api key")
+        api_key_id, api_key = self.create_model_apikey(model_ids=[model_id], allowed_ips=[self.cidr])
 
         payload = {"function": "sentiment", "text": "I am happy"}
-        resp = self.send_request_to_intelligence_endpoint(model_endpoint, "sentiment", payload,
-                                                          username, password)
+        resp = self.send_request_to_intelligence_endpoint(model_endpoint, "sentiment", payload,api_key)
         if resp.status_code != 200:
             self.fail("Failed to get response from intelligence endpoint with db creds."
                       "Status code: {}. Error: {}".format(resp.status_code, resp.content))
 
-        # Delete the creds and test auth
-        resp = self.capellaAPIv2.delete_db_user(self.tenant_id, self.project_id, self.cluster_id, user_id)
-        if resp.status_code != 200:
-            self.fail("Failed to delete db user. Status code: {}. Error: {}".format(resp.status_code, resp.content))
+        # Revoke the api_key and test
+        self.log.info("Revoke the api key and test auth")
+        resp = self.capellaAPIv2.delete_model_api_key(self.tenant_id, api_key_id=api_key_id)
+        if resp.status_code != 202:
+            self.fail(
+                "Failed to delete api_key: {}. Status code: {}. Error: {}".
+                format(api_key, resp.status_code, resp.content))
 
         payload = {"function": "sentiment", "text": "I am happy"}
-        resp = self.send_request_to_intelligence_endpoint(model_endpoint, "sentiment", payload,
-                                                          username, password)
+        resp = self.send_request_to_intelligence_endpoint(model_endpoint, "sentiment", payload, api_key)
         if resp.status_code != 401:
-            self.fail("Auth test failed for deleted username: {}, password: {}".format(username, password))
+            self.fail("Auth test failed for revoked api_key: {}".format(api_key))
 
     def get_chat_completion_payload(self, chats=[]):
         payload = {
@@ -1365,64 +1302,66 @@ class SecurityTest(SecurityBase):
 
     def test_model_ip_allowlist(self):
 
-        # Current IP is already allowed on the cluster so connection to be successfull
-        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.project_id, self.cluster_id,
-                                                   self.llm_model_id)
+        # Current IP is already allowed on the cluster so connection to be successful
+        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.llm_model_id)
         if resp.status_code != 200:
             self.fail("Failed to fetch model details. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
         model_details = resp.json()
-        llm_model_endpoint = model_details["data"]["endpoint"]
+        llm_model_endpoint = model_details["data"]["network"]["endpoint"]
 
-        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.project_id, self.cluster_id,
-                                                   self.embedding_model_id)
+        resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.embedding_model_id)
         if resp.status_code != 200:
             self.fail("Failed to fetch model details. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
 
         model_details = resp.json()
-        embedding_model_endpoint = model_details["data"]["endpoint"]
+        embedding_model_endpoint = model_details["data"]["network"]["endpoint"]
 
-        username = self.generate_random_name(base_name="user")
-        password = self.generate_random_name(base_name="psswd") + "!123"
-        resp = self.capellaAPIv2.create_db_user(self.tenant_id, self.project_id, self.cluster_id,
-                                                username, password)
+        api_key_embedding_id, api_key_embedding = self.create_model_apikey(model_ids=[self.embedding_model_id], allowed_ips=[self.cidr])
+        api_key_llm_id, api_key_llm = self.create_model_apikey(model_ids=[self.llm_model_id], allowed_ips=[self.cidr])
 
         if resp.status_code != 200:
             self.fail("Failed to create db user. Status code: {}. Error: {}".
                       format(resp.status_code, resp.content))
-        user_id = resp.json()["id"]
+
         # Send request to llm model
         chat_payload = self.get_chat_completion_payload()
-        resp = self.send_request_to_model(llm_model_endpoint, "chat", chat_payload,
-                                          username, password)
+        resp = self.send_request_to_model(llm_model_endpoint, "chat", chat_payload, api_key_llm)
         if resp is None:
             self.fail("Failed to send request to model even though current IP is allowed")
 
         embedding_payload = self.get_embedding_payload()
-        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", embedding_payload,
-                                          username, password)
+        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", embedding_payload, api_key_embedding)
         if resp is None:
             self.fail("Failed to send request to model even though current IP is allowed")
 
         # Remove IP's and test connection failure
-        resp = self.capellaAPIv2.get_allowed_ip_list(self.tenant_id, self.project_id, self.cluster_id)
-        ip_allowlist = resp.json()["data"]
+        llm_updated_embedding_payload = self.get_model_apikey_update_payload(model_ids=[self.llm_model_id],
+                                                                           allowed_ips=['10.254.254.254/20'])
 
-        for added_ip in ip_allowlist:
-            ip_id = added_ip["data"]["id"]
-            resp = self.capellaAPIv2.delete_allowed_ip(self.tenant_id, self.project_id, self.cluster_id, ip_id)
-            if resp.status_code != 202:
-                self.fail("Failed to delete ip: {}. Status code: {}. Error: {}".
-                          format(added_ip["data"]["cidr"], resp.status_code, resp.content))
+        embedding_updated_embedding_payload = self.get_model_apikey_update_payload(model_ids=[self.llm_model_id],
+                                                                           allowed_ips=['10.254.254.254/20'])
+
+        resp = self.capellaAPIv2.update_model_api_key(self.tenant_id, llm_updated_embedding_payload, api_key_llm_id)
+        if resp.status_code != 204:
+            self.fail("Failed to update api_key: {}. Status code: {}. Error: {}".
+                      format(api_key_llm, resp.status_code, resp.content))
+
+        resp = self.capellaAPIv2.update_model_api_key(self.tenant_id, embedding_updated_embedding_payload, api_key_embedding_id)
+        if resp.status_code != 204:
+            self.fail("Failed to update api_key: {}. Status code: {}. Error: {}".
+                      format(api_key_embedding, resp.status_code, resp.content))
 
         # Send requests to model and verify connection fails
-        chat_payload = self.get_chat_completion_payload()
-        resp = self.send_request_to_model(llm_model_endpoint, "chat", chat_payload,
-                                          username, password, expect_conn_failure=True)
+        resp = self.send_request_to_model(llm_model_endpoint, "chat", chat_payload, api_key_llm)
         if resp is None:
-            self.fail("Failed to send request to model even though current IP is allowed")
+            self.fail("request sent successfully even though current IP is disallowed")
+
+        resp = self.send_request_to_model(embedding_model_endpoint, "embedding", embedding_payload, api_key_embedding)
+        if resp is None:
+            self.fail("request sent successfully even though current IP is disallowed")
 
     def test_gateway_endpoints_auth(self):
         resp = self.capellaAPIv2.get_model_details(self.tenant_id, self.llm_model_id)
@@ -1444,7 +1383,7 @@ class SecurityTest(SecurityBase):
         embedding_model_id = model_details["data"]["id"]
 
         # Test with invalid api_keys
-        self.log.info("Testing auth with invalid username and password")
+        self.log.info("Testing auth with invalid api_keys")
 
         for _ in range(5):
             rand_api_key = self.generate_random_name(base_name="apikey")
@@ -1462,7 +1401,7 @@ class SecurityTest(SecurityBase):
 
         # Test with valid api key
         self.log.info("Test with generated api key")
-        api_key_id, api_key = self.create_model_apikey(model_ids=[embedding_model_id, llm_model_id], allowed_ips=[])
+        api_key_id, api_key = self.create_model_apikey(model_ids=[embedding_model_id, llm_model_id], allowed_ips=[self.cidr])
 
         payload = self.get_chat_completion_payload()
         resp = self.send_request_to_model(llm_model_endpoint, "chat", payload, api_key)
@@ -1521,7 +1460,6 @@ class SecurityTest(SecurityBase):
             self.fail("Auth test failed for embedding for revoked api key. api_key: {}".
                       format(api_key))
 
-
     def get_model_apikey_create_payload(self, model_ids, allowed_ips):
         payload = {
             "name": "TestAPIKey",
@@ -1553,7 +1491,7 @@ class SecurityTest(SecurityBase):
         model_id = model_details["data"]["id"]
 
         # create an api key
-        _, api_key = self.create_model_apikey(model_ids=[model_id], allowed_ips=["0.0.0.0/0"]) # TODO check the cidr
+        _, api_key = self.create_model_apikey(model_ids=[model_id], allowed_ips=[self.cidr]) # TODO check the cidr
 
         payload = self.get_chat_completion_payload()
         resp = self.send_request_to_model(llm_model_endpoint,"chat", payload, api_key , check_http=True)
